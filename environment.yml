@@ -1,0 +1,14 @@
+name: Hyperliquid
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+    - hyperliquid-python-sdk
+    - eth-account
+    - web3
+    - requests
+    - lz4
+    - msgpack
+    - typing_extensions
