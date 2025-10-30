@@ -1,0 +1,3 @@
+hyperliquid==0.4.66
+okx==2.1.2
+python_okx==0.4.0
