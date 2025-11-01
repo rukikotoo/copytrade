@@ -1,8 +1,10 @@
-# /d:/hyperliquid-bot/hyperliquid-bot/monitor.py
+# monitor.py (您提供的可用版本)
+
 import time
 from typing import List, Dict, Optional
 from hyperliquid.info import Info
 from hyperliquid.utils import constants
+from decimal import Decimal # 引入Decimal以提高精度
 
 def get_nonzero_positions(user_state: Dict) -> List[Dict]:
     """从 user_state 返回所有非零仓位（每项是 position 字段）。"""
@@ -10,31 +12,23 @@ def get_nonzero_positions(user_state: Dict) -> List[Dict]:
     for ap in user_state.get("assetPositions", []):
         pos = ap.get("position", {})
         try:
-            szi = float(pos.get("szi", 0))
-        except (TypeError, ValueError):
-            szi = 0.0
-        if szi != 0:
+            # 使用Decimal进行比较，避免浮点数精度问题
+            szi = Decimal(pos.get("szi", '0'))
+        except Exception:
+            szi = Decimal('0')
+        if not szi.is_zero():
             results.append(pos)
     return results
 
 def fetch_user_positions(address: str, info: Optional[Info] = None) -> List[Dict]:
     """
     获取指定地址的持仓列表并返回处理后的信息列表。
-    如果未传入 info，会内部创建一个 Info 实例（并在返回前关闭它的 ws）。
-    返回项示例：
-      {
-        "coin": "BTC",
-        "direction_is_buy": True,
-        "leverage": 5,
-        "size": 0.123,
-        "mid": 60000.0,
-        "value_usd": 7380.0,
-        "raw_position": {...}
-      }
+    返回的数据已经转换为Decimal以保证精度。
     """
     created_info = False
     if info is None:
-        info = Info(base_url=constants.MAINNET_API_URL)
+        # 增加 skip_ws=True 以避免不必要的websocket连接
+        info = Info(base_url=constants.MAINNET_API_URL, skip_ws=True)
         created_info = True
 
     try:
@@ -45,67 +39,53 @@ def fetch_user_positions(address: str, info: Optional[Info] = None) -> List[Dict
 
         for pos in positions:
             coin = pos.get("coin", "?")
-            try:
-                mid = float(all_mids.get(coin, 0) or 0)
-            except (TypeError, ValueError):
-                mid = 0.0
-
-            try:
-                szi = float(pos.get("szi", 0))
-            except (TypeError, ValueError):
-                szi = 0.0
-
+            
+            # 统一使用Decimal处理所有数值
+            mid = Decimal(all_mids.get(coin, '0'))
+            szi = Decimal(pos.get("szi", '0'))
+            
             direction_is_buy = szi > 0
+            
             try:
                 lev_val = pos.get("leverage", {}).get("value")
-                leverage = int(lev_val) if lev_val is not None else 0
-            except (TypeError, ValueError):
-                leverage = 0
+                leverage = Decimal(lev_val) if lev_val is not None else Decimal('0')
+            except Exception:
+                leverage = Decimal('0')
 
-            size = abs(szi)
+            size = szi.copy_abs()
             value_usd = size * mid
 
             result.append({
                 "coin": coin,
                 "direction_is_buy": direction_is_buy,
                 "leverage": leverage,
-                "size": size,
+                "size": size, # size 是 Decimal
+                "value_usd": value_usd, # value_usd 是 Decimal
+                # 以下字段是为了调试和兼容，trade.py中不直接使用
                 "mid": mid,
-                "value_usd": value_usd,
                 "raw_position": pos,
             })
         return result
     finally:
-        if created_info:
+        # 如果是内部创建的info实例，尝试关闭它
+        if created_info and hasattr(info, 'ws_manager'):
             try:
                 info.ws_manager.close()
             except Exception:
                 pass
 
-# 可选：保留一个命令行运行时的简单监控示例
-def main_loop(target_address: str, loop_sleep_seconds: int = 30):
-    info = Info(base_url=constants.MAINNET_API_URL)
-    try:
-        print(f"监控地址: {target_address}")
-        while True:
-            print(f"\n----- {time.strftime('%Y-%m-%d %H:%M:%S')} -----")
-            positions = fetch_user_positions(target_address, info=info)
-            if not positions:
-                print("目标当前无非零持仓。")
-            else:
-                for p in positions:
-                    print(f"{p['coin']} | {'多' if p['direction_is_buy'] else '空'} | "
-                          f"杠杆: {p['leverage']}x | 数量: {p['size']} | "
-                          f"名义价值: ${p['value_usd']:.2f} | 价格: ${p['mid']:.2f}")
-            time.sleep(loop_sleep_seconds)
-    except KeyboardInterrupt:
-        print("手动中断，退出。")
-    finally:
-        try:
-            info.ws_manager.close()
-        except Exception:
-            pass
-
+# 主循环部分保持不变，用于独立测试 monitor.py
 if __name__ == "__main__":
     TARGET_USER_ADDRESS = "0xc20ac4dc4188660cbf555448af52694ca62b0734"
-    main_loop(TARGET_USER_ADDRESS, loop_sleep_seconds=30)
+    info = Info(base_url=constants.MAINNET_API_URL, skip_ws=True)
+    while True:
+        print(f"\n----- {time.strftime('%Y-%m-%d %H:%M:%S')} -----")
+        positions = fetch_user_positions(TARGET_USER_ADDRESS, info=info)
+        if not positions:
+            print("目标当前无非零持仓。")
+        else:
+            for p in positions:
+                print(f"{p['coin']} | {'多' if p['direction_is_buy'] else '空'} | "
+                      f"杠杆: {p['leverage']}x | 数量: {p['size']} | "
+                      f"名义价值: ${p['value_usd']:.2f}")
+        time.sleep(30)
